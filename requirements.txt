@@ -1,0 +1,9 @@
+customtkinter
+bcrypt
+pillow
+opencv-python
+mediapipe==0.10.9
+pyttsx3
+nltk
+pandas
+matplotlib
