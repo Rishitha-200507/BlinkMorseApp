@@ -3,23 +3,13 @@ import os
 
 folder = "asl_dataset"
 
-classes = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + [
-    "HELLO",
-    "THANK_YOU",
-    "GOOD_MORNING",
-    "GOOD_NIGHT",
-    "HOW_ARE_YOU",
-    "I_LOVE_YOU",
-    "WELCOME",
-    "SORRY",
-    "BYE"
-]
+classes = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") 
 
 cap = cv2.VideoCapture(0)
 
 current = 0
 count = 0
-max_images = 100
+max_images = 30
 
 while True:
 
