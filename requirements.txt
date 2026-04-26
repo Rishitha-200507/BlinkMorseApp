@@ -2,7 +2,7 @@ customtkinter
 bcrypt
 pillow
 opencv-python
-mediapipe==0.10.9
+mediapipe==0.10.33
 pyttsx3
 nltk
 pandas

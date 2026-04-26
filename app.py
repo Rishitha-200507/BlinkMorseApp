@@ -1,522 +1,1564 @@
+# ==========================================
+# BLINK MORSE AI APP - CLEAN FULL BUILD
+# PART 1 of FULL CODE
+# Paste this first in app.py
+# ==========================================
+
+import code
+from pdb import run
+
 import customtkinter as ctk
 import sqlite3
 import bcrypt
 from tkinter import messagebox
 import cv2
-import mediapipe as mp
-from mediapipe.python.solutions import face_mesh as mp_face_mesh
 from PIL import Image
-import time
+import mediapipe as mp
 import numpy as np
 import pyttsx3
 import threading
-import nltk
 import random
-import pandas as pd
-from matplotlib.figure import Figure
+import time
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import win32com.client
+# ------------------------------------------
+# APP SETTINGS
+# ------------------------------------------
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
-# ==========================================
-# 1. SETUP: DATABASE & NLP DICTIONARY
-# ==========================================
+
+# ------------------------------------------
+# DATABASE
+# ------------------------------------------
 def setup_database():
-    conn = sqlite3.connect("morse_database.db")
+
+    conn = sqlite3.connect("blinkmorse.db")
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS quiz_scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            total INTEGER NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password BLOB
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS morse_scores(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        score INTEGER,
+        total INTEGER
+    )
+    """)
+
     conn.commit()
     conn.close()
 
-nltk.download('words', quiet=True)
-from nltk.corpus import words
 
-def calculate_EAR(eye_points, landmarks, w, h):
-    p = [np.array([landmarks[pt].x * w, landmarks[pt].y * h]) for pt in eye_points]
-    v1 = np.linalg.norm(p[1] - p[5])
-    v2 = np.linalg.norm(p[2] - p[4])
-    hor = np.linalg.norm(p[0] - p[3])
-    return (v1 + v2) / (2.0 * hor)
-
-# ==========================================
-# 2. MAIN APPLICATION CLASS
-# ==========================================
+# ------------------------------------------
+# MAIN APP
+# ------------------------------------------
 class BlinkMorseApp(ctk.CTk):
+
     def __init__(self):
         super().__init__()
 
-        self.title("Blink Morse - Learn Morse Code!")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
-        ctk.set_appearance_mode("dark")  
-        ctk.set_default_color_theme("blue")
+
+        self.title("Blink Morse AI App")
+        self.geometry("1400x900")
 
         self.current_user = None
-        self.cap = None  
-        self.app_mode = "dashboard" 
+        self.cap = None
 
-        # --- AUDIO SETUP ---
-        self.tts_engine = pyttsx3.init()
-        self.tts_engine.setProperty('rate', 150) 
-
-        # --- MEDIAPIPE VARIABLES ---
-        self.face_mesh = mp_face_mesh.FaceMesh(max_num_faces=3, refine_landmarks=True)
-        self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
-        self.RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-        
-        # --- METRICS & DICTIONARY ---
-        self.english_words = [w.upper() for w in words.words() if len(w) > 1]
-        
-        self.MORSE_DICT = {
-            ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E",
-            "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J",
-            "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O",
-            ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T",
-            "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y",
-            "--..": "Z", ".-.-.-": ".", "--..--": ",", "..--..": "?",
-            "-.-.--": "!", "-....-": "-", ".----.": "'", "---...": ":",
-            ".-..-.": '"', "-..-.": "/"
-        }
-        self.LETTER_TO_MORSE = {v: k for k, v in self.MORSE_DICT.items()}
-        self.ALPHABET = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
         self.show_login_page()
 
-    def speak_text(self, text):
-        def run_tts():
-            self.tts_engine.say(text)
-            self.tts_engine.runAndWait()
-        threading.Thread(target=run_tts, daemon=True).start()
-
+    # --------------------------------------
+    # CLEAR WINDOW
+    # --------------------------------------
     def clear_window(self):
-        for widget in self.winfo_children(): widget.destroy()
 
-    # ==========================================
-    # 3. AUTHENTICATION 
-    # ==========================================
-    def show_login_page(self):
-        self.clear_window()
-        login_frame = ctk.CTkFrame(self, width=400, height=500, corner_radius=15)
-        login_frame.place(relx=0.5, rely=0.5, anchor=ctk.CENTER)
-        ctk.CTkLabel(login_frame, text="Blink Morse", font=("Roboto", 32, "bold")).pack(pady=(50, 30))
-        self.username_entry = ctk.CTkEntry(login_frame, placeholder_text="Username", width=250, height=40)
-        self.username_entry.pack(pady=10)
-        self.password_entry = ctk.CTkEntry(login_frame, placeholder_text="Password", show="*", width=250, height=40)
-        self.password_entry.pack(pady=10)
-        ctk.CTkButton(login_frame, text="Login", command=self.login_user, width=250, height=40).pack(pady=(20, 10))
-        ctk.CTkButton(login_frame, text="Create Account", command=self.register_user, fg_color="transparent", border_width=2, width=250, height=40).pack(pady=10)
+        if self.cap:
+            try:
+                self.cap.release()
+            except:
+                pass
 
-    def register_user(self):
-        username = self.username_entry.get().strip()
-        password = self.password_entry.get().strip()
-        if not username or not password: return
-        hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-        try:
-            conn = sqlite3.connect("morse_database.db")
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_pw))
-            conn.commit()
-            conn.close()
-            messagebox.showinfo("Success", "Account created successfully!")
-        except sqlite3.IntegrityError:
-            messagebox.showerror("Error", "Username already exists.")
+        for widget in self.winfo_children():
+            widget.destroy()
 
-    def login_user(self):
-        username = self.username_entry.get().strip()
-        password = self.password_entry.get().strip()
-        conn = sqlite3.connect("morse_database.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT password FROM users WHERE username=?", (username,))
-        result = cursor.fetchone()
-        conn.close()
-        if result and bcrypt.checkpw(password.encode('utf-8'), result[0]):
-            self.current_user = username
-            self.show_main_app()  
-        else:
-            messagebox.showerror("Error", "Invalid credentials.")
 
-    # ==========================================
-    # 4. MAIN APP NAVIGATION
-    # ==========================================
-    def show_main_app(self):
-        self.clear_window()
-        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
-        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(5, weight=1) 
-        ctk.CTkLabel(self.sidebar_frame, text="Blink Morse", font=("Roboto", 24, "bold")).grid(row=0, column=0, padx=20, pady=(30, 40))
-        ctk.CTkButton(self.sidebar_frame, text="Dashboard", command=self.view_dashboard, height=40).grid(row=1, column=0, padx=20, pady=10)
-        ctk.CTkButton(self.sidebar_frame, text="Freestyle Mode", command=self.view_freestyle, height=40).grid(row=2, column=0, padx=20, pady=10)
-        ctk.CTkButton(self.sidebar_frame, text="Learning Mode", command=self.view_learning, height=40).grid(row=3, column=0, padx=20, pady=10)
-        ctk.CTkButton(self.sidebar_frame, text="Logout", fg_color="#ab2c2c", hover_color="#852222", command=self.show_login_page, height=40).grid(row=5, column=0, padx=20, pady=20, sticky="s")
-        self.main_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.main_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
-        self.view_dashboard()
+    # --------------------------------------
+    # SPEAK
+    # --------------------------------------
+    def speak(self, text):
 
-    def clear_main_frame(self):
-        if hasattr(self, 'video_loop'): self.after_cancel(self.video_loop)
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        for widget in self.main_frame.winfo_children(): widget.destroy()
-
-    # ==========================================
-    # 5. DASHBOARD & DATA ANALYTICS
-    # ==========================================
-    def view_dashboard(self):
-        self.app_mode = "dashboard"
-        self.clear_main_frame()
-        
-        # Header
-        ctk.CTkLabel(self.main_frame, text="Analytics Dashboard", font=("Roboto", 32, "bold")).pack(pady=(40, 5), anchor="w", padx=40)
-        ctk.CTkLabel(self.main_frame, text=f"Welcome back, {self.current_user}. Track your Morse code mastery below.", font=("Roboto", 16)).pack(anchor="w", padx=40)
-
-        # 1. Fetch Data using Pandas
-        conn = sqlite3.connect("morse_database.db")
-        query = "SELECT score, total, timestamp FROM quiz_scores WHERE username=? ORDER BY timestamp ASC"
-        df = pd.read_sql_query(query, conn, params=(self.current_user,))
-        conn.close()
-
-        if df.empty:
-            ctk.CTkLabel(self.main_frame, text="You haven't taken any quizzes yet!\nGo to Learning Mode to start tracking your progress.", 
-                         font=("Roboto", 18, "italic"), text_color="gray").pack(pady=100)
+        if str(text).strip() == "":
             return
 
-        # 2. Process Data
-        df['accuracy'] = (df['score'] / df['total']) * 100
-        df['quiz_number'] = range(1, len(df) + 1)
-        
-        total_quizzes = len(df)
-        avg_accuracy = df['accuracy'].mean()
-        best_score = f"{df['score'].max()}/{df.loc[df['score'].idxmax(), 'total']}"
+        def run():
+            try:
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                speaker.Rate = 0
+                speaker.Volume = 100
+                speaker.Speak(str(text))
+            except:
+                pass
 
-        # 3. Top Stats Cards
-        stats_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        stats_frame.pack(fill="x", padx=40, pady=30)
-        stats_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        threading.Thread(
+            target=run,
+            daemon=True
+        ).start()   
+    # --------------------------------------
+    # LOGIN PAGE
+    # --------------------------------------
+    def show_login_page(self):
 
-        # Card 1: Total Quizzes
-        card1 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#1f538d")
-        card1.grid(row=0, column=0, padx=10, sticky="nsew")
-        ctk.CTkLabel(card1, text="Total Quizzes", font=("Roboto", 16)).pack(pady=(20, 5))
-        ctk.CTkLabel(card1, text=f"{total_quizzes}", font=("Roboto", 36, "bold"), text_color="#00ffcc").pack(pady=(0, 20))
+        self.clear_window()
 
-        # Card 2: Average Accuracy
-        card2 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#1f538d")
-        card2.grid(row=0, column=1, padx=10, sticky="nsew")
-        ctk.CTkLabel(card2, text="Average Accuracy", font=("Roboto", 16)).pack(pady=(20, 5))
-        ctk.CTkLabel(card2, text=f"{avg_accuracy:.1f}%", font=("Roboto", 36, "bold"), text_color="#00ffcc").pack(pady=(0, 20))
+        frame = ctk.CTkFrame(self, width=420, height=520)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Card 3: Best Score
-        card3 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color="#1f538d")
-        card3.grid(row=0, column=2, padx=10, sticky="nsew")
-        ctk.CTkLabel(card3, text="Best Score", font=("Roboto", 16)).pack(pady=(20, 5))
-        ctk.CTkLabel(card3, text=f"{best_score}", font=("Roboto", 36, "bold"), text_color="#00ffcc").pack(pady=(0, 20))
+        ctk.CTkLabel(
+            frame,
+            text="Blink Morse AI",
+            font=("Arial", 34, "bold")
+        ).pack(pady=35)
 
-        # 4. Generate Matplotlib Graph
-        fig = Figure(figsize=(8, 4), dpi=100)
-        fig.patch.set_facecolor('#2b2b2b') # Match CustomTkinter dark mode!
-        ax = fig.add_subplot(111)
-        ax.set_facecolor('#2b2b2b')
-        
-        # Plot the line
-        ax.plot(df['quiz_number'], df['accuracy'], marker='o', color='#00ffcc', linewidth=2, markersize=8)
-        
-        # Style the graph
-        ax.set_title('Learning Mode Accuracy Over Time', color='white', fontsize=14, pad=15)
-        ax.set_xlabel('Quiz Attempt', color='white')
-        ax.set_ylabel('Accuracy (%)', color='white')
-        ax.tick_params(colors='white')
-        ax.spines['bottom'].set_color('white')
-        ax.spines['left'].set_color('white')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.set_ylim(-5, 105)
-        
-        # Ensure x-axis only shows whole numbers for quizzes (1, 2, 3...)
-        from matplotlib.ticker import MaxNLocator
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        self.login_user = ctk.CTkEntry(
+            frame,
+            width=300,
+            placeholder_text="Username"
+        )
+        self.login_user.pack(pady=10)
 
-        # 5. Embed Graph into CustomTkinter
-        graph_frame = ctk.CTkFrame(self.main_frame, corner_radius=10, fg_color="gray15")
-        graph_frame.pack(fill="both", expand=True, padx=40, pady=(0, 20))
-        
-        canvas = FigureCanvasTkAgg(fig, master=graph_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+        self.login_pass = ctk.CTkEntry(
+            frame,
+            width=300,
+            show="*",
+            placeholder_text="Password"
+        )
+        self.login_pass.pack(pady=10)
 
-    # ==========================================
-    # 6. FREESTYLE MODE 
-    # ==========================================
-    def view_freestyle(self):
-        self.app_mode = "freestyle"
-        self.clear_main_frame()
-        self.main_frame.grid_rowconfigure(1, weight=1)
-        self.main_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(
+            frame,
+            text="Login",
+            width=300,
+            command=self.login_action
+        ).pack(pady=20)
 
-        ctk.CTkLabel(self.main_frame, text="Freestyle Mode", font=("Roboto", 32, "bold")).grid(row=0, column=0, pady=(20, 5), padx=40, sticky="w")
-        
-        content_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=40)
-        content_frame.grid_columnconfigure(0, weight=3) 
-        content_frame.grid_columnconfigure(1, weight=1) 
+        ctk.CTkButton(
+            frame,
+            text="Create Account",
+            width=300,
+            command=self.show_register_page
+        ).pack()
 
-        self.video_frame = ctk.CTkFrame(content_frame, corner_radius=10)
-        self.video_frame.grid(row=0, column=0, pady=10, sticky="nsew")
-        self.video_label = ctk.CTkLabel(self.video_frame, text="") 
-        self.video_label.pack(pady=10)
+    # --------------------------------------
+    # REGISTER PAGE
+    # --------------------------------------
+    def show_register_page(self):
 
-        self.tabs = ctk.CTkTabview(content_frame, width=250, corner_radius=10)
-        self.tabs.grid(row=0, column=1, pady=10, padx=(20, 0), sticky="nsew")
-        tab_commands = self.tabs.add("Commands")
-        tab_dict = self.tabs.add("Dictionary")
+        self.clear_window()
 
-        commands_list = [(".. --", "Accept Guess"), (".....", "Delete Letter"), ("----", "Delete Word"), ("......", "Clear Screen")]
-        for morse, action in commands_list:
-            ctk.CTkLabel(tab_commands, text=f"{morse}", font=("Roboto", 18, "bold"), text_color="#00ffcc").pack(pady=(10, 0))
-            ctk.CTkLabel(tab_commands, text=f"{action}", font=("Roboto", 14)).pack(pady=(0, 10))
+        frame = ctk.CTkFrame(self, width=420, height=560)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        dict_scroll = ctk.CTkScrollableFrame(tab_dict, fg_color="transparent")
-        dict_scroll.pack(fill="both", expand=True)
-        for ascii_val in range(65, 91): 
-            letter = chr(ascii_val)
-            morse = self.LETTER_TO_MORSE.get(letter, "")
-            ctk.CTkLabel(dict_scroll, text=f"{letter}   {morse}", font=("Roboto", 16, "bold")).pack(pady=2, anchor="w", padx=20)
+        ctk.CTkLabel(
+            frame,
+            text="Create Account",
+            font=("Arial", 32, "bold")
+        ).pack(pady=30)
 
-        self.output_frame = ctk.CTkFrame(self.main_frame, corner_radius=10, fg_color="gray15")
-        self.output_frame.grid(row=2, column=0, pady=(0, 20), padx=40, sticky="ew")
-        self.ui_morse_label = ctk.CTkLabel(self.output_frame, text="Morse: ", font=("Roboto", 20, "bold"), text_color="#00ffcc")
-        self.ui_morse_label.pack(pady=(10, 0))
-        self.ui_prediction_label = ctk.CTkLabel(self.output_frame, text="Guess: ...", font=("Roboto", 20, "italic"), text_color="yellow")
-        self.ui_prediction_label.pack(pady=5)
-        self.ui_text_label = ctk.CTkLabel(self.output_frame, text="Text: ", font=("Roboto", 28, "bold"))
-        self.ui_text_label.pack(pady=(5, 10))
+        self.reg_user = ctk.CTkEntry(
+            frame,
+            width=300,
+            placeholder_text="Username"
+        )
+        self.reg_user.pack(pady=10)
 
-        self.reset_metrics()
-        self.cap = cv2.VideoCapture(0)
-        self.update_frame() 
+        self.reg_pass = ctk.CTkEntry(
+            frame,
+            width=300,
+            show="*",
+            placeholder_text="Password"
+        )
+        self.reg_pass.pack(pady=10)
 
-    # ==========================================
-    # 7. LEARNING MODE 
-    # ==========================================
-    def view_learning(self):
-        self.app_mode = "learning"
-        self.clear_main_frame()
-        self.main_frame.grid_rowconfigure(1, weight=1)
-        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.reg_confirm = ctk.CTkEntry(
+            frame,
+            width=300,
+            show="*",
+            placeholder_text="Confirm Password"
+        )
+        self.reg_confirm.pack(pady=10)
 
-        ctk.CTkLabel(self.main_frame, text="Learning Mode: Flashcards", font=("Roboto", 32, "bold")).grid(row=0, column=0, pady=(20, 5), padx=40, sticky="w")
-        
-        content_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=40)
-        content_frame.grid_columnconfigure(0, weight=2) 
-        content_frame.grid_columnconfigure(1, weight=1) 
+        ctk.CTkButton(
+            frame,
+            text="Register",
+            width=300,
+            command=self.register_action
+        ).pack(pady=20)
 
-        self.video_frame = ctk.CTkFrame(content_frame, corner_radius=10)
-        self.video_frame.grid(row=0, column=0, pady=10, sticky="nsew")
-        self.video_label = ctk.CTkLabel(self.video_frame, text="") 
-        self.video_label.pack(pady=10)
+        ctk.CTkButton(
+            frame,
+            text="Back",
+            width=300,
+            command=self.show_login_page
+        ).pack()
 
-        quiz_frame = ctk.CTkFrame(content_frame, corner_radius=10, fg_color="#1c4b82")
-        quiz_frame.grid(row=0, column=1, pady=10, padx=(20, 0), sticky="nsew")
-        
-        self.quiz_score = 0
-        self.quiz_total = 0
-        self.target_letter = random.choice(self.ALPHABET)
+    # --------------------------------------
+    # REGISTER ACTION
+    # --------------------------------------
+    def register_action(self):
 
-        self.ui_score_label = ctk.CTkLabel(quiz_frame, text="Score: 0 / 0", font=("Roboto", 24, "bold"))
-        self.ui_score_label.pack(pady=(30, 20))
+        user = self.reg_user.get().strip()
+        pwd = self.reg_pass.get().strip()
+        con = self.reg_confirm.get().strip()
 
-        ctk.CTkLabel(quiz_frame, text="Blink the letter:", font=("Roboto", 18)).pack(pady=(10, 0))
-        self.ui_target_label = ctk.CTkLabel(quiz_frame, text=self.target_letter, font=("Roboto", 80, "bold"), text_color="#00ffcc")
-        self.ui_target_label.pack(pady=10)
+        if user == "" or pwd == "":
+            messagebox.showerror("Error", "Fill all fields")
+            return
 
-        self.ui_feedback_label = ctk.CTkLabel(quiz_frame, text="Waiting for input...", font=("Roboto", 18, "italic"))
-        self.ui_feedback_label.pack(pady=20)
+        if pwd != con:
+            messagebox.showerror("Error", "Passwords do not match")
+            return
 
-        self.output_frame = ctk.CTkFrame(self.main_frame, height=80, corner_radius=10, fg_color="gray15")
-        self.output_frame.grid(row=2, column=0, pady=(0, 20), padx=40, sticky="ew")
-        self.ui_morse_label = ctk.CTkLabel(self.output_frame, text="Your Input: ", font=("Roboto", 24, "bold"), text_color="#00ffcc")
-        self.ui_morse_label.pack(pady=20)
+        hashed = bcrypt.hashpw(
+            pwd.encode(),
+            bcrypt.gensalt()
+        )
 
-        save_btn = ctk.CTkButton(quiz_frame, text="Finish & Save Score", fg_color="#28a745", hover_color="#218838", command=self.save_quiz)
-        save_btn.pack(side="bottom", pady=30)
-
-        self.reset_metrics()
-        self.cap = cv2.VideoCapture(0)
-        self.update_frame() 
-
-    def save_quiz(self):
-        if self.quiz_total > 0:
-            conn = sqlite3.connect("morse_database.db")
+        try:
+            conn = sqlite3.connect("blinkmorse.db")
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO quiz_scores (username, score, total) VALUES (?, ?, ?)", 
-                           (self.current_user, self.quiz_score, self.quiz_total))
+
+            cursor.execute(
+                "INSERT INTO users(username,password) VALUES (?,?)",
+                (user, hashed)
+            )
+
             conn.commit()
             conn.close()
-            messagebox.showinfo("Quiz Saved", f"Saved! You scored {self.quiz_score}/{self.quiz_total}.")
-        self.view_dashboard()
+
+            messagebox.showinfo("Success", "Account Created")
+            self.show_login_page()
+
+        except:
+            messagebox.showerror("Error", "Username exists")
+
+    # --------------------------------------
+    # LOGIN ACTION
+    # --------------------------------------
+    def login_action(self):
+
+        user = self.login_user.get().strip()
+        pwd = self.login_pass.get().strip()
+
+        conn = sqlite3.connect("blinkmorse.db")
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT password FROM users WHERE username=?",
+            (user,)
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and bcrypt.checkpw(
+            pwd.encode(),
+            row[0]
+        ):
+            self.current_user = user
+            self.show_module_page()
+        else:
+            messagebox.showerror(
+                "Error",
+                "Invalid Login"
+            )
+
+    # --------------------------------------
+    # MODULE PAGE
+    # --------------------------------------
+    def show_module_page(self):
+
+        self.clear_window()
+
+        frame = ctk.CTkFrame(self, width=650, height=620)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(
+            frame,
+            text=f"Welcome {self.current_user}",
+            font=("Arial", 34, "bold")
+        ).pack(pady=35)
+
+        ctk.CTkButton(
+            frame,
+            text="Morse Blink Module",
+            width=380,
+            height=80,
+            command=self.open_morse_module
+        ).pack(pady=20)
+
+        ctk.CTkButton(
+            frame,
+            text="Sign Language Module",
+            width=380,
+            height=80,
+            fg_color="green",
+            command=self.open_sign_module
+        ).pack(pady=20)
+
+
+        ctk.CTkButton(
+            frame,
+            text="Logout",
+            width=250,
+            fg_color="red",
+            command=self.show_login_page
+        ).pack(pady=30)
+
+    # --------------------------------------
+    # OPEN MORSE
+    # --------------------------------------
+    def open_morse_module(self):
+
+        self.clear_window()
+
+        self.sidebar = ctk.CTkFrame(self, width=220)
+        self.sidebar.pack(side="left", fill="y")
+
+        ctk.CTkLabel(
+            self.sidebar,
+            text="Morse Blink",
+            font=("Arial", 28, "bold")
+        ).pack(pady=25)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Dashboard",
+            width=180,
+            command=self.show_dashboard
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Freestyle",
+            width=180,
+            command=self.show_freestyle
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+             self.sidebar,
+             text="Learning Quiz",
+             width=180,
+             command=self.show_learning_quiz
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Change Module",
+            width=180,
+            command=self.show_module_page
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Logout",
+            width=180,
+            fg_color="red",
+            command=self.show_login_page
+        ).pack(pady=30)
+
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.pack(
+            side="right",
+            fill="both",
+            expand=True
+        )
+
+        self.show_dashboard()
 
     # ==========================================
-    # 8. MASTER VIDEO LOOP 
-    # ==========================================
-    def reset_metrics(self):
+# PART 2 of FULL CODE
+# Paste BELOW Part 1 in same app.py
+# ==========================================
+
+    # --------------------------------------
+    # CLEAR MAIN FRAME
+    # --------------------------------------
+    
+    def clear_main(self):
+        
+
+        self.page_active = False
+
+        if self.cap:
+            try:
+                self.cap.release()
+            except:
+                pass
+
+        for w in self.main_frame.winfo_children():
+            w.destroy()
+
+    # --------------------------------------
+    # DASHBOARD
+    # --------------------------------------
+    def show_dashboard(self):
+        self.clear_main()
+
+        conn = sqlite3.connect("blinkmorse.db")
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT score,total
+        FROM morse_scores
+        WHERE username=?
+        ORDER BY id DESC
+        LIMIT 1
+        """, (self.current_user,))
+        recent = cur.fetchone()
+
+        cur.execute("""
+        SELECT MAX(score)
+        FROM morse_scores
+        WHERE username=?
+        """, (self.current_user,))
+        best = cur.fetchone()
+
+        cur.execute("""
+        SELECT SUM(score),SUM(total)
+        FROM morse_scores
+        WHERE username=?
+        """, (self.current_user,))
+        sums = cur.fetchone()
+
+        cur.execute("""
+        SELECT score
+        FROM morse_scores
+        WHERE username=?
+        ORDER BY id ASC
+        """, (self.current_user,))
+        graph_scores = cur.fetchall()
+
+        conn.close()
+
+        rs = recent[0] if recent else 0
+        rt = recent[1] if recent else 0
+        bs = best[0] if best[0] else 0
+
+        if sums and sums[1]:
+            acc = int((sums[0]/sums[1])*100)
+        else:
+            acc = 0
+
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Dashboard",
+            font=("Arial",34,"bold")
+        ).pack(pady=20)
+
+        row = ctk.CTkFrame(self.main_frame)
+        row.pack(pady=10)
+
+        cards = [
+            ("Recent Score", f"{rs}/{rt}"),
+            ("Accuracy", f"{acc}%"),
+            ("Best Score", f"{bs}/10")
+        ]
+
+        for title,val in cards:
+
+            box = ctk.CTkFrame(row,width=220,height=130)
+            box.pack(side="left", padx=15)
+
+            ctk.CTkLabel(box,text=title).pack(pady=15)
+            ctk.CTkLabel(
+            box,
+            text=val,
+            font=("Arial",28,"bold")
+        ).pack()
+
+    # -------------------------
+    # GRAPH
+    # -------------------------
+        if graph_scores:
+
+            values = [x[0] for x in graph_scores]
+            attempts = list(range(1, len(values)+1))
+
+            fig = plt.Figure(figsize=(20,12), dpi=100)
+            ax = fig.add_subplot(111)
+
+            ax.bar(attempts, values)
+            ax.set_title("Quiz Scores")
+            ax.set_xlabel("Attempt")
+            ax.set_ylabel("Score")
+
+            canvas = FigureCanvasTkAgg(
+                fig,
+                master=self.main_frame
+            )
+            canvas.draw()
+            canvas.get_tk_widget().pack(pady=20)
+
+        else:
+
+            ctk.CTkLabel(
+            self.main_frame,
+            text="No quiz data yet"
+        ).pack(pady=30)
+
+    # --------------------------------------
+    # FREESTYLE PAGE
+    # --------------------------------------
+    def show_freestyle(self):
+
+        self.clear_main()
+        self.page_active = True
+
         self.is_calibrated = False
-        self.calibration_start_time = time.time()
-        self.calibration_ears = []
-        self.EAR_THRESHOLD = 0.0
-        self.blink_start_time = 0
-        self.is_blinking = False
-        self.last_blink_end_time = time.time()
+        self.calibration_start = time.time()
+        self.calibration_values = []
+
+        self.blinking = False
+        self.blink_start = 0
+        self.last_blink_end = time.time()
+
         self.current_morse = ""
-        self.current_text = ""
-        self.predicted_word = ""
+        self.current_word = ""
+        self.full_text = ""
+        self.symbol_time = time.time()
 
-    def update_frame(self):
-        if self.cap is not None and self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if ret:
-                frame = cv2.flip(frame, 1)
-                h_img, w_img, _ = frame.shape
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self.letter_processed = False
+        self.word_processed = False
 
-                results = self.face_mesh.process(rgb_frame)
-                
-                if results.multi_face_landmarks:
-                    if len(results.multi_face_landmarks) > 1:
-                        cv2.rectangle(rgb_frame, (30, 10), (610, 50), (255, 0, 0), -1)
-                        cv2.putText(rgb_frame, "WARNING: MULTIPLE FACES DETECTED", (60, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        self.morse_dict = {
+            "A": ".-", "B": "-...", "C": "-.-.",
+            "D": "-..", "E": ".", "F": "..-.",
+            "G": "--.", "H": "....", "I": "..",
+            "J": ".---", "K": "-.-", "L": ".-..",
+            "M": "--", "N": "-.", "O": "---",
+            "P": ".--.", "Q": "--.-", "R": ".-.",
+            "S": "...", "T": "-", "U": "..-",
+            "V": "...-", "W": ".--", "X": "-..-",
+            "Y": "-.--", "Z": "--.."
+        }
+
+        self.reverse_dict = {
+            v:k for k,v in self.morse_dict.items()
+        }
+
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Freestyle Mode",
+            font=("Arial", 30, "bold")
+        ).pack(pady=10)
+
+        top = ctk.CTkFrame(self.main_frame)
+        top.pack(fill="both", expand=True)
+
+        self.cam_label = ctk.CTkLabel(top, text="")
+        self.cam_label.pack(side="left", padx=10)
+
+        right = ctk.CTkScrollableFrame(top, width=320)
+        right.pack(side="right", fill="y")
+
+        ctk.CTkLabel(
+            right,
+            text="Commands",
+            font=("Arial", 22, "bold")
+        ).pack(pady=10)
+
+        cmds = [
+            (".....", "Delete Letter"),
+            ("----", "Delete Word"),
+            ("..--", "Accept Guess"),
+            (".", "Short Blink"),
+            ("-", "Long Blink"),
+            ("Pause >2 sec", "Letter End"),
+            ("Pause >4 sec", "Speak Word")
+        ]
+
+        for a,b in cmds:
+            ctk.CTkLabel(
+                right,
+                text=f"{a} = {b}"
+            ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            right,
+            text="Dictionary",
+            font=("Arial", 22, "bold")
+        ).pack(pady=10)
+
+        for k,v in self.morse_dict.items():
+            ctk.CTkLabel(
+                right,
+                text=f"{k} = {v}"
+            ).pack(anchor="w")
+
+        self.status_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Calibrating..."
+        )
+        self.status_lbl.pack()
+
+        self.morse_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Morse:",
+            font=("Arial", 22, "bold")
+        )
+        self.morse_lbl.pack()
+
+        self.text_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Text:",
+            font=("Arial", 28, "bold")
+        )
+        self.text_lbl.pack()
+
+        self.guess_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Guess Word:"
+        )
+        self.guess_lbl.pack()
+
+        self.cap = cv2.VideoCapture(0)
+
+        self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True
+        )
+
+        self.LEFT = [33,160,158,133,153,144]
+        self.RIGHT = [362,385,387,263,373,380]
+
+        self.update_freestyle()
+
+# ==========================================
+# PART 3 of FULL CODE
+# Paste BELOW Part 2 in same app.py
+# ==========================================
+
+    # --------------------------------------
+    # GUESS WORD
+    # --------------------------------------
+    def show_guess(self):
+
+        if not hasattr(self, "guess_lbl"):
+            return
+
+        if not self.guess_lbl.winfo_exists():
+            return
+
+        words = [
+        "HELLO","HELP","HOME",
+        "GOOD","GO","COME",
+        "CALL","CLASS","COLLEGE"
+    ]
+
+        typed = self.current_word.upper()
+
+        if typed == "":
+            self.guess_lbl.configure(
+                text="Guess Word:"
+            )
+            return
+
+        arr = []
+
+        for w in words:
+            if w.startswith(typed):
+                arr.append(w)
+
+        self.guess_lbl.configure(
+            text="Guess Word: " + " / ".join(arr[:3])
+        )
+    # --------------------------------------
+    # FREESTYLE CAMERA LOOP
+    # --------------------------------------
+    def update_freestyle(self):
+
+        if not hasattr(self, "page_active") or not self.page_active:
+            return
+
+        if not self.cap.isOpened():
+            return
+
+        ret, frame = self.cap.read()
+
+        if not ret:
+            return
+
+        frame = cv2.resize(frame, (640,480))
+
+        frame = cv2.flip(frame, 1)
+
+        h, w, _ = frame.shape
+
+        rgb = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2RGB
+        )
+
+        result = self.face_mesh.process(rgb)
+
+        if result.multi_face_landmarks:
+
+            face = result.multi_face_landmarks[0]
+
+            def EAR(ids):
+
+                pts = []
+
+                for i in ids:
+
+                    x = int(face.landmark[i].x * w)
+                    y = int(face.landmark[i].y * h)
+
+                    pts.append((x, y))
+
+                    cv2.circle(
+                        frame,
+                        (x, y),
+                        2,
+                        (0,255,0),
+                        -1
+                    )
+
+                p = np.array(pts)
+
+                v1 = np.linalg.norm(p[1]-p[5])
+                v2 = np.linalg.norm(p[2]-p[4])
+                hor = np.linalg.norm(p[0]-p[3])
+
+                return (v1+v2)/(2*hor)
+
+            ear = (EAR(self.LEFT)+EAR(self.RIGHT))/2
+
+            now = time.time()
+
+            # Calibration = 5 sec
+            if not self.is_calibrated:
+
+                self.calibration_values.append(ear)
+
+                left = 5 - int(now-self.calibration_start)
+
+                self.status_lbl.configure(
+                    text=f"Calibrating... {left}s"
+                )
+
+                if now-self.calibration_start > 5:
+
+                    self.threshold = np.mean(
+                        self.calibration_values
+                    ) * 0.75
+
+                    self.is_calibrated = True
+
+                    self.status_lbl.configure(
+                        text="Ready"
+                    )
+
+            else:
+
+                # Eye closed
+                if ear < self.threshold:
+
+                    if not self.blinking:
+                        self.blinking = True
+                        self.blink_start = now
+
+                else:
+
+                    if self.blinking:
+
+                        self.blinking = False
+
+                        dur = now - self.blink_start
+                        self.blink_start = 0
+                        self.last_blink_end = now
+
+                        if dur < 0.5:
+                            self.current_morse += "."
+                        else:
+                            self.current_morse += "-"
+
+                        self.letter_processed = False
+                        self.word_processed = False
+
+                        self.morse_lbl.configure(
+                            text="Morse: " + self.current_morse
+                        )
+
+                gap = now-self.last_blink_end
+
+                # Process after 2 sec
+                                # Process after 2 sec
+                if gap > 2 and self.current_morse != "" and not self.letter_processed:
+
+                    code = self.current_morse
+
+                    # delete letter
+                    if code == ".....":
+
+                        if len(self.current_word) > 0:
+                            self.current_word = self.current_word[:-1]
+
                         
-                    face_landmarks = results.multi_face_landmarks[0] 
-                    left_ear = calculate_EAR(self.LEFT_EYE, face_landmarks.landmark, w_img, h_img)
-                    right_ear = calculate_EAR(self.RIGHT_EYE, face_landmarks.landmark, w_img, h_img)
-                    avg_ear = (left_ear + right_ear) / 2.0
 
-                    if not self.is_calibrated:
-                        self.calibration_ears.append(avg_ear)
-                        time_left = 5.0 - (time.time() - self.calibration_start_time)
-                        if time_left > 0:
-                            cv2.putText(rgb_frame, f"CALIBRATING... Keep eyes open: {int(time_left)}s", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
-                        else:
-                            self.EAR_THRESHOLD = (sum(self.calibration_ears) / len(self.calibration_ears)) * 0.75
-                            self.is_calibrated = True
-                            self.last_blink_end_time = time.time()
-                            if self.app_mode == "learning":
-                                self.speak_text(f"Blink the letter {self.target_letter}")
-                    
+                    # delete word
+                    elif code == "----":
+
+                        self.current_word = ""
+
+                        
+                    # accept guess
+                    elif code == "..--":
+
+                        guess_text = self.guess_lbl.cget("text")
+
+                        guess = guess_text.replace(
+                            "Guess Word: ",
+                            ""
+                        ).split("/")[0].strip()
+
+                        if guess == "":
+                            guess = self.current_word
+
+                        if guess != "":
+
+                            self.full_text += guess + " "
+
+                            
+
+                        self.current_word = ""
+
+                        self.show_guess()
+
+                        
+
+                    # normal letter
                     else:
-                        if avg_ear < self.EAR_THRESHOLD:
-                            if not self.is_blinking:
-                                self.is_blinking = True
-                                self.blink_start_time = time.time()
+
+                        letter = self.reverse_dict.get(
+                            code, ""
+                        )
+
+                        if letter != "":
+                            self.current_word += letter
+
+                    self.text_lbl.configure(
+                        text="Text: " +
+                        self.full_text +
+                        self.current_word
+                    )
+
+                    self.show_guess()
+
+                    self.current_morse = ""
+
+                    self.last_blink_end = time.time()
+
+                    self.morse_lbl.configure(
+                        text="Morse:"
+                    )
+
+                    self.letter_processed = True
+
+                # Complete word after 4 sec
+                if gap > 4 and self.current_word != "" and not self.word_processed:
+
+                    word = self.current_word
+
+                    self.full_text += word + " "
+
+                    self.text_lbl.configure(
+                        text="Text: " + self.full_text
+                    )
+
+                    self.speak(word)
+
+                    self.current_word = ""
+
+                    self.word_processed = True
+                    self.last_blink_end = time.time()
+
+        img = Image.fromarray(
+            cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
+        )
+
+        ctk_img = ctk.CTkImage(
+            light_image=img,
+            dark_image=img,
+            size=(640,480)
+        )
+
+        if self.blinking and (now - self.blink_start) > 2:
+            self.blinking = False
+            self.blink_start = 0
+
+        self.cam_label.configure(
+            image=ctk_img
+        )
+
+        self.after(
+            40,
+            self.update_freestyle
+        )
+
+        
+
+    # --------------------------------------
+    # LEARNING QUIZ PAGE
+    # --------------------------------------
+    def show_learning_quiz(self):
+
+        self.clear_main()
+
+        self.quiz_total = 10
+        self.quiz_index = 0
+        self.quiz_score = 0
+
+        self.current_word = ""
+        self.current_morse = ""
+
+        self.quiz_mode = ctk.StringVar(value="Letters")
+
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Learning Quiz",
+            font=("Arial", 30, "bold")
+        ).pack(pady=15)
+
+        body = ctk.CTkFrame(self.main_frame)
+        body.pack(fill="both", expand=True, padx=15, pady=10)
+
+        # LEFT CAMERA
+        left = ctk.CTkFrame(body)
+        left.pack(side="left", fill="both", expand=True, padx=10)
+
+        self.cam_label = ctk.CTkLabel(
+            left,
+            text=""
+        )
+        self.cam_label.pack(pady=20)
+
+        # RIGHT PANEL
+        right = ctk.CTkFrame(body, width=320)
+        right.pack(side="right", fill="y", padx=10)
+
+        ctk.CTkOptionMenu(
+            right,
+            values=["Letters","Words","Sentences"],
+            variable=self.quiz_mode
+        ).pack(pady=10)
+
+        self.quiz_lbl = ctk.CTkLabel(
+            right,
+            text="Question 1 / 10",
+            font=("Arial",20,"bold")
+        )
+        self.quiz_lbl.pack(pady=10)
+
+        self.question_lbl = ctk.CTkLabel(
+            right,
+            text="HELLO",
+            font=("Arial",28,"bold")
+        )
+        self.question_lbl.pack(pady=15)
+
+        self.answer_lbl = ctk.CTkLabel(
+            right,
+            text="Your Answer:"
+        )
+        self.answer_lbl.pack(pady=10)
+
+        self.result_lbl = ctk.CTkLabel(
+            right,
+            text=""
+        )
+        self.result_lbl.pack(pady=10)
+
+        ctk.CTkButton(
+            right,
+            text="Check",
+            command=self.check_quiz_answer
+        ).pack(pady=5)
+
+        ctk.CTkButton(
+            right,
+            text="Next",
+            command=self.next_quiz_question
+        ).pack(pady=5)
+
+        self.score_lbl = ctk.CTkLabel(
+            right,
+            text="Score: 0 / 10"
+        )
+        self.score_lbl.pack(pady=15)
+
+        self.status_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Ready"
+        )
+        self.status_lbl.pack(pady=5)
+
+        self.morse_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Morse:"
+        )
+        self.morse_lbl.pack()
+
+        self.text_lbl = ctk.CTkLabel(
+            self.main_frame,
+            text="Text:"
+        )
+        self.text_lbl.pack()
+
+        # start quiz
+        self.next_quiz_question()
+        self.prepare_quiz_camera()
+        self.update_quiz_camera()
+
+    # --------------------------------------
+    # NEXT QUESTION
+    # --------------------------------------
+    def next_quiz_question(self):
+
+        import random
+
+        if self.quiz_index >= self.quiz_total:
+            self.finish_quiz()
+            return
+
+        self.quiz_index += 1
+
+        self.current_word = ""
+        self.current_morse = ""
+
+        self.answer_lbl.configure(text="Your Answer:")
+        self.result_lbl.configure(text="")
+        self.text_lbl.configure(text="Text:")
+
+        self.quiz_lbl.configure(
+            text=f"Question {self.quiz_index} / {self.quiz_total}"
+        )
+
+        letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+        words = [
+            "HELLO","HELP","YES",
+            "NO","HOME","WATER"
+        ]
+
+        sentences = [
+            "HELLO WORLD",
+            "GOOD MORNING",
+            "THANK YOU"
+        ]
+
+        mode = self.quiz_mode.get()
+
+        if mode == "Letters":
+            self.target_answer = random.choice(letters)
+
+        elif mode == "Words":
+            self.target_answer = random.choice(words)
+
+        else:
+            self.target_answer = random.choice(sentences)
+
+        self.question_lbl.configure(
+            text="Blink: " + self.target_answer
+        )
+
+        self.after(
+        300,
+        lambda: self.speak(
+            "Blink " + self.target_answer
+            )
+        )
+
+    def prepare_quiz_camera(self):
+
+        self.cap = cv2.VideoCapture(0)
+
+        self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True
+        )
+
+        self.LEFT = [33,160,158,133,153,144]
+        self.RIGHT = [362,385,387,263,373,380]
+
+        self.is_calibrated = False
+        self.calibration_start = time.time()
+        self.calibration_values = []
+
+        self.blinking = False
+        self.blink_start = 0
+        self.last_blink_end = time.time()
+
+        self.current_morse = ""
+        self.current_word = ""
+
+    def update_quiz_camera(self):
+
+        if not self.cap or not self.cap.isOpened():
+            return
+
+        ret, frame = self.cap.read()
+
+        if not ret:
+            self.after(30, self.update_quiz_camera)
+            return
+
+        frame = cv2.flip(frame, 1)
+
+        h, w, _ = frame.shape
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        result = self.face_mesh.process(rgb)
+
+        if result.multi_face_landmarks:
+
+            face = result.multi_face_landmarks[0]
+
+            def EAR(ids):
+
+                pts = []
+
+                for i in ids:
+                    x = int(face.landmark[i].x * w)
+                    y = int(face.landmark[i].y * h)
+
+                    pts.append((x, y))
+
+                    cv2.circle(frame, (x, y), 2, (0,255,0), -1)
+
+                p = np.array(pts)
+
+                v1 = np.linalg.norm(p[1]-p[5])
+                v2 = np.linalg.norm(p[2]-p[4])
+                hor = np.linalg.norm(p[0]-p[3])
+
+                return (v1+v2)/(2*hor)
+
+            ear = (EAR(self.LEFT)+EAR(self.RIGHT))/2
+            now = time.time()
+
+            # -------------------
+            # Calibration
+            # -------------------
+            if not self.is_calibrated:
+
+                self.calibration_values.append(ear)
+
+                left = max(0, 5 - int(now-self.calibration_start))
+
+                self.status_lbl.configure(
+                    text=f"Calibrating... {left}s"
+                )
+
+                if now-self.calibration_start > 5:
+
+                    self.threshold = np.mean(
+                        self.calibration_values
+                    ) * 0.75
+
+                    self.is_calibrated = True
+
+                    self.status_lbl.configure(
+                        text="Ready"
+                    )
+
+            else:
+
+                # eye closed
+                if ear < self.threshold:
+
+                    if not self.blinking:
+                        self.blinking = True
+                        self.blink_start = now
+
+                else:
+
+                    if self.blinking:
+
+                        self.blinking = False
+
+                        dur = now-self.blink_start
+                        self.last_blink_end = now
+
+                        if dur < 0.5:
+                            self.current_morse += "."
                         else:
-                            if self.is_blinking:
-                                self.is_blinking = False
-                                blink_duration = time.time() - self.blink_start_time
-                                self.last_blink_end_time = time.time()
-                                
-                                if blink_duration < 0.5: self.current_morse += "."
-                                else: self.current_morse += "-"
-                                
-                                if self.app_mode == "freestyle": self.ui_morse_label.configure(text=f"Morse: {self.current_morse}")
-                                elif self.app_mode == "learning": self.ui_morse_label.configure(text=f"Your Input: {self.current_morse}")
+                            self.current_morse += "-"
 
-                        pause_time = time.time() - self.last_blink_end_time
+                        self.morse_lbl.configure(
+                            text="Morse: " + self.current_morse
+                        )
 
-                        if self.app_mode == "freestyle":
-                            if pause_time > 2.0 and self.current_morse != "":
-                                if self.current_morse == ".....":
-                                    if len(self.current_text) > 0:
-                                        self.current_text = self.current_text[:-1]
-                                        if len(self.current_text) > 0 and self.current_text[-1] == " ": self.current_text = self.current_text[:-1] 
-                                    self.predicted_word = ""
-                                elif self.current_morse == "......":
-                                    self.current_text = ""
-                                    self.predicted_word = ""
-                                elif self.current_morse == "----":
-                                    if len(self.current_text.strip()) > 0:
-                                        words = self.current_text.strip().split(" ")
-                                        words.pop()
-                                        self.current_text = " ".join(words) + " " if words else ""
-                                    self.predicted_word = ""
-                                elif self.current_morse == "..--":
-                                    if self.predicted_word:
-                                        words = self.current_text.strip().split(" ")
-                                        if words: words.pop()
-                                        self.current_text = " ".join(words) + " " + self.predicted_word + " " if words else self.predicted_word + " "
-                                        self.speak_text(self.predicted_word)
-                                        self.predicted_word = ""
-                                else:
-                                    letter = self.MORSE_DICT.get(self.current_morse, "")
-                                    if letter:
-                                        self.current_text += letter
-                                        current_word = self.current_text.split(" ")[-1]
-                                        self.predicted_word = ""
-                                        if len(current_word) >= 2:
-                                            matches = [w for w in self.english_words if w.startswith(current_word) and len(w) > len(current_word)]
-                                            if matches: self.predicted_word = matches[0]
-                                    
-                                self.current_morse = ""
-                                self.ui_morse_label.configure(text="Morse: ")
-                                self.ui_prediction_label.configure(text=f"Guess: {self.predicted_word} (..--) to accept" if self.predicted_word else "Guess: ...")
-                                self.ui_text_label.configure(text=f"Text: {self.current_text}")
-                                self.last_blink_end_time = time.time() 
+                gap = now-self.last_blink_end
 
-                            if pause_time > 4.0 and len(self.current_text) > 0 and self.current_text[-1] != " ":
-                                words = self.current_text.split()
-                                last_word = words[-1] if words else ""
-                                self.current_text += " "
-                                self.predicted_word = ""
-                                if last_word: self.speak_text(last_word)
-                                self.ui_prediction_label.configure(text="Guess: ...")
-                                self.ui_text_label.configure(text=f"Text: {self.current_text}")
-                                self.last_blink_end_time = time.time() 
+                # process letter after 2 sec
+                if gap > 2 and self.current_morse != "":
 
-                        elif self.app_mode == "learning":
-                            if pause_time > 2.0 and self.current_morse != "":
-                                correct_morse = self.LETTER_TO_MORSE[self.target_letter]
-                                self.quiz_total += 1
-                                if self.current_morse == correct_morse:
-                                    self.quiz_score += 1
-                                    self.ui_feedback_label.configure(text="Correct! 🎉", text_color="#00ffcc")
-                                    self.speak_text("Correct")
-                                else:
-                                    self.ui_feedback_label.configure(text=f"Wrong! {self.target_letter} is {correct_morse}", text_color="#ff4444")
-                                    self.speak_text("Incorrect")
+                    letter = self.reverse_dict.get(
+                        self.current_morse, ""
+                    )
 
-                                self.ui_score_label.configure(text=f"Score: {self.quiz_score} / {self.quiz_total}")
-                                self.target_letter = random.choice(self.ALPHABET)
-                                self.ui_target_label.configure(text=self.target_letter)
-                                self.current_morse = ""
-                                self.ui_morse_label.configure(text="Your Input: ")
-                                self.last_blink_end_time = time.time()
+                    if letter != "":
+                        self.current_word += letter
 
-                        for pt in self.LEFT_EYE + self.RIGHT_EYE:
-                            pos = face_landmarks.landmark[pt]
-                            cv2.circle(rgb_frame, (int(pos.x * w_img), int(pos.y * h_img)), 2, (0, 255, 0), -1)
+                    self.answer_lbl.configure(
+                        text="Your Answer: " + self.current_word
+                    )
 
-                img = Image.fromarray(rgb_frame)
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(640, 480))
-                self.video_label.configure(image=ctk_img)
-                self.video_label.image = ctk_img
+                    self.text_lbl.configure(
+                        text="Text: " + self.current_word
+                    )
 
-            self.video_loop = self.after(15, self.update_frame)
+                    self.current_morse = ""
 
+                    self.morse_lbl.configure(
+                        text="Morse:"
+                    )
+
+        img = Image.fromarray(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        )
+
+        ctk_img = ctk.CTkImage(
+            light_image=img,
+            dark_image=img,
+            size=(760,520)
+        )
+
+        self.cam_label.configure(image=ctk_img)
+
+        self.after(15, self.update_quiz_camera)
+
+
+    # --------------------------------------
+    # CHECK ANSWER
+    # --------------------------------------
+    def check_quiz_answer(self):
+
+        
+        ans = self.current_word.strip().upper()
+        target = self.target_answer.strip().upper()
+
+        if ans == target:
+
+            self.quiz_score += 1
+
+            self.result_lbl.configure(
+                text="Correct",
+                text_color="green"
+            )
+            self.speak("Correct")
+
+
+
+        else:
+
+            self.result_lbl.configure(
+                text="Wrong",
+                text_color="red"
+            )
+            self.speak("Wrong")
+
+           
+
+        self.score_lbl.configure(
+            text=f"Score: {self.quiz_score} / {self.quiz_total}"
+        )
+
+
+    # --------------------------------------
+    # FINISH QUIZ
+    # --------------------------------------
+    def finish_quiz(self):
+
+        conn = sqlite3.connect("blinkmorse.db")
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO morse_scores(username,score,total)
+        VALUES(?,?,?)
+        """, (
+            self.current_user,
+            self.quiz_score,
+            self.quiz_total
+        ))
+
+        conn.commit()
+        conn.close()
+
+        self.question_lbl.configure(
+            text="Quiz Finished"
+        )
+
+        self.result_lbl.configure(
+            text=f"Final Score: {self.quiz_score}/{self.quiz_total}"
+        )
+
+    
+
+    # --------------------------------------
+    # QUIZ CAMERA LOOP
+    # --------------------------------------
+    def update_learning_frame(self):
+
+        if not self.cap.isOpened():
+            return
+
+        ret, frame = self.cap.read()
+
+        if not ret:
+            return
+
+        frame = cv2.flip(frame, 1)
+
+        h, w, _ = frame.shape
+
+        rgb = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2RGB
+        )
+
+        result = self.face_mesh.process(rgb)
+
+        if result.multi_face_landmarks:
+
+            face = result.multi_face_landmarks[0]
+
+            def EAR(ids):
+
+                pts = []
+
+                for i in ids:
+
+                    x = int(face.landmark[i].x * w)
+                    y = int(face.landmark[i].y * h)
+
+                    pts.append((x, y))
+
+                    cv2.circle(
+                        frame,
+                        (x, y),
+                        2,
+                        (0,255,0),
+                        -1
+                    )
+
+                p = np.array(pts)
+
+                v1 = np.linalg.norm(p[1]-p[5])
+                v2 = np.linalg.norm(p[2]-p[4])
+                hor = np.linalg.norm(p[0]-p[3])
+
+                return (v1+v2)/(2*hor)
+
+            ear = (EAR(self.LEFT)+EAR(self.RIGHT))/2
+
+            now = time.time()
+
+            # Calibration
+            if not self.is_calibrated:
+
+                self.calibration_values.append(ear)
+
+                left = 5 - int(now-self.calibration_start)
+
+                self.status_lbl.configure(
+                    text=f"Calibrating... {left}s"
+                )
+
+                if now-self.calibration_start > 5:
+
+                    self.threshold = np.mean(
+                        self.calibration_values
+                    ) * 0.75
+
+                    self.is_calibrated = True
+
+                    self.status_lbl.configure(
+                        text="Ready"
+                    )
+
+            else:
+
+                if ear < self.threshold:
+
+                    if not self.blinking:
+                        self.blinking = True
+                        self.blink_start = now
+
+                else:
+
+                    if self.blinking:
+
+                        self.blinking = False
+
+                        dur = now-self.blink_start
+                        self.last_blink_end = now
+
+                        if dur < 0.5:
+                            self.current_morse += "."
+                        else:
+                            self.current_morse += "-"
+
+                        self.morse_lbl.configure(
+                            text="Morse: " + self.current_morse
+                        )
+
+                gap = now-self.last_blink_end
+
+                # process letter
+                if gap > 2 and self.current_morse != "":
+
+                    letter = self.reverse_dict.get(
+                        self.current_morse, ""
+                    )
+
+                    if letter != "":
+                        self.current_word += letter
+
+                    self.answer_lbl.configure(
+                        text="Your Answer: " + self.current_word
+                    )
+
+                    self.text_lbl.configure(
+                        text="Text: " + self.current_word
+                    )
+
+                    self.current_morse = ""
+
+                    self.morse_lbl.configure(
+                        text="Morse:"
+                    )
+
+        img = Image.fromarray(
+            cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
+        )
+
+        ctk_img = ctk.CTkImage(
+            light_image=img,
+            dark_image=img,
+            size=(640,480)
+        )
+
+        self.cam_label.configure(
+            image=ctk_img
+        )
+
+        self.after(
+            15,
+            self.update_learning_frame
+        )    
+
+        # --------------------------------------
+    # OPEN SIGN MODULE
+    # --------------------------------------
+    def open_sign_module(self):
+
+        self.clear_window()
+
+        self.sidebar = ctk.CTkFrame(self, width=220)
+        self.sidebar.pack(side="left", fill="y")
+
+        ctk.CTkLabel(
+            self.sidebar,
+            text="Sign Module",
+            font=("Arial", 28, "bold")
+        ).pack(pady=25)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Dashboard",
+            width=180,
+            command=self.show_sign_dashboard
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Translator",
+            width=180
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Learning",
+            width=180
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Change Module",
+            width=180,
+            command=self.show_module_page
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Logout",
+            width=180,
+            fg_color="red",
+            command=self.show_login_page
+        ).pack(pady=30)
+
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.pack(
+            side="right",
+            fill="both",
+            expand=True
+        )
+
+        self.show_sign_dashboard()
+
+        # --------------------------------------
+    # SIGN DASHBOARD
+    # --------------------------------------
+    def show_sign_dashboard(self):
+
+        self.clear_main()
+
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Sign Language Dashboard",
+            font=("Arial", 34, "bold")
+        ).pack(pady=30)
+
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Translator + Learning Coming Next",
+            font=("Arial", 22)
+        ).pack(pady=20)
+
+# ------------------------------------------
+# RUN APP
+# ------------------------------------------
 if __name__ == "__main__":
+
     setup_database()
+
     app = BlinkMorseApp()
+
     app.mainloop()
