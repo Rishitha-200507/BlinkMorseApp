@@ -1474,83 +1474,11 @@ class BlinkMorseApp(ctk.CTk):
             self.update_learning_frame
         )    
 
-        # --------------------------------------
-    # OPEN SIGN MODULE
-    # --------------------------------------
     def open_sign_module(self):
 
-        self.clear_window()
+        from sign_module import open_sign_module
 
-        self.sidebar = ctk.CTkFrame(self, width=220)
-        self.sidebar.pack(side="left", fill="y")
-
-        ctk.CTkLabel(
-            self.sidebar,
-            text="Sign Module",
-            font=("Arial", 28, "bold")
-        ).pack(pady=25)
-
-        ctk.CTkButton(
-            self.sidebar,
-            text="Dashboard",
-            width=180,
-            command=self.show_sign_dashboard
-        ).pack(pady=10)
-
-        ctk.CTkButton(
-            self.sidebar,
-            text="Translator",
-            width=180
-        ).pack(pady=10)
-
-        ctk.CTkButton(
-            self.sidebar,
-            text="Learning",
-            width=180
-        ).pack(pady=10)
-
-        ctk.CTkButton(
-            self.sidebar,
-            text="Change Module",
-            width=180,
-            command=self.show_module_page
-        ).pack(pady=10)
-
-        ctk.CTkButton(
-            self.sidebar,
-            text="Logout",
-            width=180,
-            fg_color="red",
-            command=self.show_login_page
-        ).pack(pady=30)
-
-        self.main_frame = ctk.CTkFrame(self)
-        self.main_frame.pack(
-            side="right",
-            fill="both",
-            expand=True
-        )
-
-        self.show_sign_dashboard()
-
-        # --------------------------------------
-    # SIGN DASHBOARD
-    # --------------------------------------
-    def show_sign_dashboard(self):
-
-        self.clear_main()
-
-        ctk.CTkLabel(
-            self.main_frame,
-            text="Sign Language Dashboard",
-            font=("Arial", 34, "bold")
-        ).pack(pady=30)
-
-        ctk.CTkLabel(
-            self.main_frame,
-            text="Translator + Learning Coming Next",
-            font=("Arial", 22)
-        ).pack(pady=20)
+        open_sign_module(self)
 
 # ------------------------------------------
 # RUN APP
