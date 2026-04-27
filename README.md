@@ -1,4 +1,4 @@
-# AI-Powered Multimodal Learning and Communication System
+# Multimodal Learning and Communication System
 
 An intelligent desktop application that combines **Sign Language Learning** and **Blink Morse Interaction** into one platform using Artificial Intelligence, Computer Vision, and Machine Learning.
 
