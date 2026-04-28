@@ -155,8 +155,10 @@ def predict_sign(app, frame):
             idx = np.argmax(probs)
             conf = probs[idx]
 
-            if conf > 0.75:
+            if conf > 0.82:
                 pred = app.label_map[str(idx)]
+            else:
+                pred = ""
 
     return frame, pred, conf
 
@@ -368,15 +370,15 @@ def translate_text(app):
             result = txt
         else:
             result = GoogleTranslator(
-                source="en",
+                source="auto",
                 target=target
-            ).translate(txt)
+            ).translate(txt.title())
 
         app.translated_lbl.configure(
             text="Translated Text: " + result
         )
 
-    except:
+    except Exception as e:
         app.translated_lbl.configure(
             text="Translation Failed"
         )

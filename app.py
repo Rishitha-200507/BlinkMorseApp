@@ -6,6 +6,7 @@
 
 import code
 from pdb import run
+from unittest import result
 
 import customtkinter as ctk
 import sqlite3
@@ -632,7 +633,7 @@ class BlinkMorseApp(ctk.CTk):
         self.cap = cv2.VideoCapture(0)
 
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=1,
+            max_num_faces=3,
             refine_landmarks=True
         )
 
@@ -708,6 +709,36 @@ class BlinkMorseApp(ctk.CTk):
         )
 
         result = self.face_mesh.process(rgb)
+
+# ---------------------------------
+# MULTIPLE FACE CHECK (SAFE FIX)
+# ---------------------------------
+        if result.multi_face_landmarks:
+
+            if len(result.multi_face_landmarks) > 1:
+
+                self.status_lbl.configure(
+                    text="⚠ Only one face allowed"
+            )
+
+            self.blinking = False
+            self.blink_start = 0
+
+            img = Image.fromarray(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            )
+
+            ctk_img = ctk.CTkImage(
+                light_image=img,
+                dark_image=img,
+                size=(640,480)
+            )
+
+            self.cam_label.configure(image=ctk_img)
+
+            self.after(40, self.update_freestyle)
+            return
+
 
         if result.multi_face_landmarks:
 
