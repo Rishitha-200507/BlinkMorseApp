@@ -275,8 +275,8 @@ def show_sign_dashboard(app):
     graph.create_line(50, 40, 50, 250, width=2, fill="white")
 
     # Labels
-    graph.create_text(380, 275, text="Epochs", fill="white", font=("Arial", 14))
-    graph.create_text(20, 145, text="Acc", fill="white", font=("Arial", 14))
+    graph.create_text(380, 275, text="Iterations", fill="white", font=("Arial", 14))
+    graph.create_text(20, 145, text="Accuracy", fill="white", font=("Arial", 14))
 
     # Example graph points
     points = [
