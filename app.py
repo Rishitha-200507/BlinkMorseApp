@@ -8,6 +8,7 @@ import code
 from pdb import run
 from unittest import result
 
+from PIL.ImageQt import rgb
 import customtkinter as ctk
 import sqlite3
 import bcrypt
@@ -68,7 +69,7 @@ class BlinkMorseApp(ctk.CTk):
         super().__init__()
 
 
-        self.title("Blink Morse AI App")
+        self.title("MORSE-SIGN APP")
         self.geometry("1400x900")
 
         self.current_user = None
@@ -697,50 +698,56 @@ class BlinkMorseApp(ctk.CTk):
         if not ret:
             return
 
-        frame = cv2.resize(frame, (640,480))
-
+        frame = cv2.resize(frame, (640, 480))
         frame = cv2.flip(frame, 1)
 
         h, w, _ = frame.shape
 
-        rgb = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2RGB
-        )
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         result = self.face_mesh.process(rgb)
 
-# ---------------------------------
-# MULTIPLE FACE CHECK (SAFE FIX)
-# ---------------------------------
+    # ---------------------------------
+    # MULTIPLE FACE CHECK (FINAL FIX)
+    # ---------------------------------
         if result.multi_face_landmarks:
 
-            if len(result.multi_face_landmarks) > 1:
+            face_count = len(result.multi_face_landmarks)
+
+        # 🚨 MORE THAN ONE FACE
+            if face_count > 1:
 
                 self.status_lbl.configure(
                     text="⚠ Only one face allowed"
-            )
+             )
 
-            self.blinking = False
-            self.blink_start = 0
+            # STOP BLINK
+                self.blinking = False
+                self.blink_start = 0
 
-            img = Image.fromarray(
-                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            )
+            # RESET CALIBRATION
+                self.is_calibrated = False
+                self.calibration_values = []
+                self.calibration_start = time.time()
 
-            ctk_img = ctk.CTkImage(
-                light_image=img,
-                dark_image=img,
-                size=(640,480)
-            )
+                img = Image.fromarray(
+                    cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                )
 
-            self.cam_label.configure(image=ctk_img)
+                ctk_img = ctk.CTkImage(
+                    light_image=img,
+                    dark_image=img,
+                    size=(640, 480)
+                )
 
-            self.after(40, self.update_freestyle)
-            return
+                self.cam_label.configure(image=ctk_img)
 
+                self.after(40, self.update_freestyle)
+                return
 
-        if result.multi_face_landmarks:
+        # ✅ ONE FACE
+            else:
+                self.status_lbl.configure(text="Ready")
 
             face = result.multi_face_landmarks[0]
 
@@ -749,58 +756,49 @@ class BlinkMorseApp(ctk.CTk):
                 pts = []
 
                 for i in ids:
-
                     x = int(face.landmark[i].x * w)
                     y = int(face.landmark[i].y * h)
 
                     pts.append((x, y))
 
-                    cv2.circle(
-                        frame,
-                        (x, y),
-                        2,
-                        (0,255,0),
-                        -1
-                    )
+                    cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
 
                 p = np.array(pts)
 
-                v1 = np.linalg.norm(p[1]-p[5])
-                v2 = np.linalg.norm(p[2]-p[4])
-                hor = np.linalg.norm(p[0]-p[3])
+                v1 = np.linalg.norm(p[1] - p[5])
+                v2 = np.linalg.norm(p[2] - p[4])
+                hor = np.linalg.norm(p[0] - p[3])
 
-                return (v1+v2)/(2*hor)
+                return (v1 + v2) / (2 * hor)
 
-            ear = (EAR(self.LEFT)+EAR(self.RIGHT))/2
+            ear = (EAR(self.LEFT) + EAR(self.RIGHT)) / 2
 
             now = time.time()
 
-            # Calibration = 5 sec
+        # --------------------
+        # CALIBRATION
+        # --------------------
             if not self.is_calibrated:
 
                 self.calibration_values.append(ear)
 
-                left = 5 - int(now-self.calibration_start)
+                left = 5 - int(now - self.calibration_start)
 
                 self.status_lbl.configure(
                     text=f"Calibrating... {left}s"
                 )
 
-                if now-self.calibration_start > 5:
+                if now - self.calibration_start > 5:
 
-                    self.threshold = np.mean(
-                        self.calibration_values
-                    ) * 0.75
+                    self.threshold = np.mean(self.calibration_values) * 0.75
 
                     self.is_calibrated = True
 
-                    self.status_lbl.configure(
-                        text="Ready"
-                    )
+                    self.status_lbl.configure(text="Ready")
 
             else:
 
-                # Eye closed
+            # Eye closed
                 if ear < self.threshold:
 
                     if not self.blinking:
@@ -829,29 +827,20 @@ class BlinkMorseApp(ctk.CTk):
                             text="Morse: " + self.current_morse
                         )
 
-                gap = now-self.last_blink_end
+                gap = now - self.last_blink_end
 
-                # Process after 2 sec
-                                # Process after 2 sec
+            # Process letter
                 if gap > 2 and self.current_morse != "" and not self.letter_processed:
 
                     code = self.current_morse
 
-                    # delete letter
                     if code == ".....":
-
                         if len(self.current_word) > 0:
                             self.current_word = self.current_word[:-1]
 
-                        
-
-                    # delete word
                     elif code == "----":
-
                         self.current_word = ""
 
-                        
-                    # accept guess
                     elif code == "..--":
 
                         guess_text = self.guess_lbl.cget("text")
@@ -865,55 +854,39 @@ class BlinkMorseApp(ctk.CTk):
                             guess = self.current_word
 
                         if guess != "":
-
                             self.full_text += guess + " "
 
-                            
-
                         self.current_word = ""
-
                         self.show_guess()
 
-                        
-
-                    # normal letter
                     else:
 
-                        letter = self.reverse_dict.get(
-                            code, ""
-                        )
+                        letter = self.reverse_dict.get(code, "")
 
                         if letter != "":
                             self.current_word += letter
 
                     self.text_lbl.configure(
-                        text="Text: " +
-                        self.full_text +
-                        self.current_word
+                        text="Text: " + self.full_text + self.current_word
                     )
 
                     self.show_guess()
 
                     self.current_morse = ""
-
                     self.last_blink_end = time.time()
 
-                    self.morse_lbl.configure(
-                        text="Morse:"
-                    )
+                    self.morse_lbl.configure(text="Morse:")
 
                     self.letter_processed = True
 
-                # Complete word after 4 sec
+            # Complete word
                 if gap > 4 and self.current_word != "" and not self.word_processed:
 
                     word = self.current_word
 
                     self.full_text += word + " "
 
-                    self.text_lbl.configure(
-                        text="Text: " + self.full_text
-                    )
+                    self.text_lbl.configure(text="Text: " + self.full_text)
 
                     self.speak(word)
 
@@ -922,31 +895,22 @@ class BlinkMorseApp(ctk.CTk):
                     self.word_processed = True
                     self.last_blink_end = time.time()
 
+    # ---------------------------------
+    # DISPLAY FRAME
+    # ---------------------------------
         img = Image.fromarray(
-            cv2.cvtColor(
-                frame,
-                cv2.COLOR_BGR2RGB
-            )
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         )
 
         ctk_img = ctk.CTkImage(
             light_image=img,
             dark_image=img,
-            size=(640,480)
+            size=(640, 480)
         )
 
-        if self.blinking and (now - self.blink_start) > 2:
-            self.blinking = False
-            self.blink_start = 0
+        self.cam_label.configure(image=ctk_img)
 
-        self.cam_label.configure(
-            image=ctk_img
-        )
-
-        self.after(
-            40,
-            self.update_freestyle
-        )
+        self.after(40, self.update_freestyle)
 
         
 
