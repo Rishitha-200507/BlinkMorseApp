@@ -643,6 +643,7 @@ def next_learning_letter(app):
     set_learning_letter(app, letter)
 
 
+
 def update_learning_camera(app):
 
     ret, frame = app.cap.read()
